@@ -1,0 +1,15 @@
+
+stages:
+  - build
+  - verify-build
+  - build-container
+  - deploy
+  - deploy-prod
+  - validate-deploy
+  - validate-prod
+  - go-live
+  - switch-route
+  - create-tag
+  - after-deploy
+  - validate-LB
+  - cleanup

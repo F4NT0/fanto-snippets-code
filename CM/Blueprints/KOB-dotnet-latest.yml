@@ -1,0 +1,819 @@
+# ╭───────────────────╮
+# │ .NET KOB PIPELINE │
+# ╰───────────────────╯
+
+include:
+- project: devops/job-templates
+  ref: v3.0.0
+  file: dotnet-jobs.yml
+- project: devops/job-templates
+  ref: v3.0.0
+  file: change-jobs.yml
+- project: devops/job-templates
+  ref: v3.0.0
+  file: cicd-stages.yml
+- project: devops/job-templates
+  ref: v3.0.0
+  file: security-jobs.yml
+- project: devops/job-templates
+  ref: v3.0.0
+  file: deploy-jobs.yml
+- project: devops/job-templates
+  ref: v3.0.0
+  file: artifactory-jobs.yml
+- project: devops/cicd-constructs
+  ref: v3.0.0
+  file: cicd-constructs.yml
+- project: devops/job-templates
+  ref: v3.0.0
+  file: test-jobs.yml
+- project: devops/job-templates
+  ref: v3.0.0
+  file: custom-jobs.yml
+
+# ── STAGES ─────────────────────────────────────────────────────────────
+
+stages:
+  - build
+  - verify-build
+  - build-container
+  - deploy
+  - deploy-prod
+  - validate-deploy
+  - validate-prod
+  - go-live
+  - switch-route
+  - create-tag
+  - after-deploy
+  - validate-LB
+  - cleanup
+
+# ── VARIABLES ──────────────────────────────────────────────────────────
+
+variables:
+  BUILD_CSPROJ: $API_PROJ_PATH
+  UNIT_TEST_PROJ: $API_TEST_PROJ_PATH
+  UNIT_TEST_DIR: $UNIT_TEST_DIR
+  
+  TARGET: target
+  UPLOAD_PATH: $UPLOAD_PATH
+  UPLOAD_FILENAME: $CI_PROJECT_NAME-$CI_COMMIT_SHORT_SHA.tar.gz
+  
+  KOB_MF_FILE: $API_ROOT/manifest/vars-$ENVIRONMENT.yml
+  APP_NAME: $APPLICATION_NAME
+  BLUE_APP: $APPLICATION_NAME-blue
+
+  # NON-PROD variables
+  KOB_API_NONPROD: api-r3-np.kob.dell.com
+  KOB_DOMAIN_NONPROD: r3-np.kob.dell.com
+
+  VAULT_CONFIG_PATH_NONPROD: kv/KOB/$APP_SUB_DOMAIN/non-prod
+  NAMESPACE_NONPROD: $APP_NAMESPACE-$ENVIRONMENT
+  KOB_DOMAIN: dfsservicecloud
+  
+  # PROD variables
+  KOB_API_PROD_PC1: api-p2.kob.dell.com
+  KOB_API_PROD_S3B: api-s1.kob.dell.com
+  KOB_DOMAIN_PC1: $DOMAIN_PC1 
+  KOB_DOMAIN_S3B: $DOMAIN_S3B
+  KOB_DOMAIN_LB: $DOMAIN_LB
+
+  VAULT_CONFIG_PATH_PROD: kv/KOB/$APP_SUB_DOMAIN
+  NAMESPACE_PROD: $APP_NAMESPACE
+
+  # DELL PROXY
+  PROXY: http://proxy.us.dell.com:80/
+
+# ───────────────────────────────────────────────────────────────────────
+
+# ── FUNCTIONS ──────────────────────────────────────────────────────────
+
+.verify_nuget: &verify_nuget
+  - |
+    files=$(git ls-files)
+    if echo "$files" | grep -q "Nuget.config"; then dotnet restore --configfile Nuget.config ; else echo "Nuget.config not found in the API! the main restore is happening inside the DevOps template"; fi    
+
+.environment_rules_np: &environment_rules_np
+  - if: $TARGET_ENVIRONMENT == null && $CI_COMMIT_BRANCH =~ /^release./
+    variables:
+      ENVIRONMENT: dit
+      TARGET_ENVIRONMENT: DIT
+      KOB_DOMAIN: $DOMAIN_DIT
+  - if: $TARGET_ENVIRONMENT == null && $CI_COMMIT_BRANCH == "develop-ge1"
+    variables:
+      ENVIRONMENT: ge1
+      TARGET_ENVIRONMENT: ge1
+      KOB_DOMAIN: $DOMAIN_GE1
+  - if: $TARGET_ENVIRONMENT == null && $CI_COMMIT_BRANCH == "develop-ge2"
+    variables:
+      ENVIRONMENT: ge2
+      TARGET_ENVIRONMENT: ge2
+      KOB_DOMAIN: $DOMAIN_GE2
+  - if: $TARGET_ENVIRONMENT == null && $CI_COMMIT_BRANCH == "develop-ge3"
+    variables:
+      ENVIRONMENT: ge3
+      TARGET_ENVIRONMENT: ge3
+      KOB_DOMAIN: $DOMAIN_GE3
+  - if: $TARGET_ENVIRONMENT == null && $CI_COMMIT_BRANCH == "develop-ge4"
+    variables:
+      ENVIRONMENT: ge4
+      TARGET_ENVIRONMENT: ge4
+      KOB_DOMAIN: $DOMAIN_GE4
+  - if: $TARGET_ENVIRONMENT == null && $CI_COMMIT_BRANCH == "develop-perf"
+    variables:
+      ENVIRONMENT: perf
+      TARGET_ENVIRONMENT: perf
+      KOB_DOMAIN: $DOMAIN_PERF
+  - if: $TARGET_ENVIRONMENT == null && $CI_COMMIT_BRANCH =~ /^story./
+    variables:
+      ENVIRONMENT: dev
+      TARGET_ENVIRONMENT: dev
+      KOB_DOMAIN: $DOMAIN_DEV
+  - if: $TARGET_ENVIRONMENT =~ /^(dev|dit|ge1|ge2|ge3|ge4|perf)$/
+    variables:
+      ENVIRONMENT: $TARGET_ENVIRONMENT
+  
+.branch_check: &branch_check
+  - if: '$CI_COMMIT_BRANCH =~ /^([Rr]elease).*$/ && $TARGET_ENVIRONMENT !~ /^(ge1|ge2|ge3|ge4|perf|production)$/ && $CI_COMMIT_TAG == null'
+  - if: '$CI_COMMIT_BRANCH =~ /^([Ss]tory).*$/ && $TARGET_ENVIRONMENT !~ /^(ge1|ge2|ge3|ge4|perf|production)$/ && $CI_COMMIT_TAG == null'
+  - if: '$CI_COMMIT_BRANCH =~ /^([Dd]evelop).*$/ && $TARGET_ENVIRONMENT !~ /^(ge1|ge2|ge3|ge4|perf|production)$/ && $CI_COMMIT_TAG == null'    
+
+# ───────────────────────────────────────────────────────────────────────────
+
+# ── BEFORE SCRIPT ──────────────────────────────────────────────────────────
+
+before_script:
+  - |
+    echo "Current branch: $CI_COMMIT_BRANCH"
+    echo "Current TRIGGER_TARGET_ENVIRONMENT: $TRIGGER_TARGET_ENVIRONMENT "
+    echo "Current TARGET_ENVIRONMENT: $TARGET_ENVIRONMENT"
+    echo "Current ENVIRONMENT: $ENVIRONMENT"
+    echo "Current Commit tag: $CI_COMMIT_TAG"
+    echo "Version App: $VERSION_APP"
+    echo "Version Major: $VERSION_MAJOR"
+    echo "Version Minor: $VERSION_MINOR"
+    echo "CI_PIPELINE_ID: $CI_PIPELINE_ID"
+  - |
+    if [[ "${CI_COMMIT_TAG}" ]]
+    then
+      export VERSION_APP=${CI_COMMIT_TAG}
+    fi
+    if [[ -z "${VERSION_APP}" ]]
+    then
+      export VERSION_APP=${VERSION_MAJOR}.${VERSION_MINOR}.${CI_PIPELINE_ID}
+      echo "Using version $VERSION_APP"
+    fi
+  - |
+    if [[ ${TARGET_ENVIRONMENT} == "prod"* ]];
+    then
+      export VAULT_ROLE_ID=$PROD_VAULT_ROLE_ID
+      echo "Using PROD VAULT_ROLE_ID = $VAULT_ROLE_ID"
+      export VAULT_SECRET_ID=$PROD_VAULT_SECRET_ID
+      echo "Using PROD VAULT_SECRET_ID = $VAULT_SECRET_ID"
+      export VAULT_ADDR=$PROD_VAULT_ADDR
+      echo "Using PROD VAULT_ADDR = $VAULT_ADDR"
+      export UPLOAD_PATH=$PROD_UPLOAD_PATH
+      echo "Using PROD UPLOAD_PATH = $UPLOAD_PATH"
+    fi
+# ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# ┌──────────────────────╮
+# │ MISC ENVIRONMENT JOBS│
+# └──────────────────────╯
+
+# ── COMPILE-PACKAGE ────────────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/v3.0.0/dotnet-jobs.yml#L31
+# Stage: build
+
+compile-package:
+  extends: .compile-package-dotnetcore
+  allow_failure: false
+  variables:
+    BUILD_CONFIGURATION: Release
+  rules:
+    - if: $TARGET_ENVIRONMENT !~ /^(ge1|ge2|ge3|ge4|perf|production)$/ && $CI_PIPELINE_SOURCE != 'merge_request_event'
+  before_script:
+    - *verify_nuget
+  tags:
+    - linux
+
+# ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+# ┌──────────────────────────╮
+# │ NON-PROD ENVIRONMENT JOBS│
+# └──────────────────────────╯
+# Branches: story/xxx, develop-ge*, release/xxx
+
+
+# ── CODE QUALITY ────────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/v3.0.0/security-jobs.yml?ref_type=tags#L593
+# Stage: verify-build 
+
+code-quality:
+  extends: .code-quality 
+  allow_failure: false
+  image: $DOTNET_8_SDK_IMG
+  variables:
+    SONAR_EXCLUSIONS: '**/.xml, **/.xlsm, **/.xsd, **/.css, **/.less, **/*.scss'
+    COVERAGE_FILE: $CI_PROJECT_DIR/coverage/*.xml
+    SONAR_PROJECT_NAME: $CI_PROJECT_NAME
+    SONAR_SLEEP: '5'
+    SONAR_LANG: dotnetcore
+    SONAR_RETRY: '30'
+    TEST_CMD: jest --silent --collect-coverage
+    SONAR_LOGIN_TOKEN: dabec5c8634097d30e57aa6aeb51cc91aa0e75f8
+  rules:
+    - *branch_check
+  before_script:
+    - *verify_nuget
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# ── UNIT TEST ────────────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/v3.0.0/dotnet-jobs.yml#L263
+# Stage: verify-build 
+
+unit-test:
+  extends: .unit-test-dotnetcore 
+  allow_failure: false
+  image: $DOTNET_8_SDK_IMG
+  variables:
+    UNIT_TEST_PROJ: $API_TEST_PROJ_PATH
+  rules:
+    - *branch_check
+  before_script:
+    - *verify_nuget
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# ── INCLUSIVE LANGUAGE ───────────────────────────────────────────────────────────────────────────────────────
+
+# Location: TBD
+# Stage: verify-build 
+
+inclusive-lang:
+  extends: .inclusive_language
+  rules:
+    - *branch_check
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+# ── XRAY SCAN ────────────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/v3.0.0/security-jobs.yml?ref_type=tags#L379
+# Stage: verify-build 
+
+xray_scan:
+  extends: .xray-scan 
+  allow_failure: false
+  variables:
+    ARTIFACT_SECRET_PATH: kv/ARTIFACTORY
+    ARTIFACT_LANG: default
+  rules:
+    - *branch_check
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# ── MALWARE SCAN ─────────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/v3.0.0/security-jobs.yml#L439
+# Stage: verify-build 
+
+malware-scan:
+  extends: .malware-scan 
+  allow_failure: false
+  dependencies:
+    - compile-package
+  rules:
+    - *branch_check
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# ── SNYK SCANS ───────────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: TBD
+# Stage: verify-build 
+
+sca-scan:
+  extends: .sca-scan
+  allow_failure: false
+  image: $DOTNET_8_SDK_IMG
+  before_script:
+    - *verify_nuget
+  rules:
+    - *branch_check
+
+sast-scan:
+  extends: .sast-scan
+  allow_failure: false
+  image: $DOTNET_8_SDK_IMG
+  before_script:
+    - *verify_nuget
+  rules:
+    - *branch_check
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+# ── BUILD CONTAINER NP ───────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/v3.0.0/deploy-jobs.yml#L1922
+# Stage: build-container 
+
+kob-build-container-np:
+  extends: .build-container-image 
+  variables:
+    CONTAINER_TOOL: kob
+    APP_NAME: $APPLICATION_NAME
+    KOBACE_MANIFEST_FILE: $KOB_MF_FILE
+    VAULT_CONFIG_PATH: $VAULT_CONFIG_PATH_NONPROD
+    KOBACE_ARGS: $APP_NAME -i 1 -m 256m -c 100m
+    NAMESPACE: $NAMESPACE_NONPROD
+  rules:
+  - *environment_rules_np
+  after_script:
+    - echo "Building for NON-PRODUCTION"
+    - echo "Using VAULT_CONFIG_PATH = $VAULT_CONFIG_PATH"
+    - echo "Using KOBACE_ARGS = $KOBACE_ARGS"
+    - echo "Using NAMESPACE = $NAMESPACE"
+    - echo "Using VAULT_ADDR = $VAULT_ADDR"
+    - echo "Using APP_NAME = $APP_NAME"
+    - echo "Using KOBACE_MANIFEST_FILE = $KOBACE_MANIFEST_FILE"
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+# ── DEPLOY NON-PROD ──────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/v3.0.0/deploy-jobs.yml#L1643
+# Stage: deploy 
+
+# Branches: story/xxx, develop-ge*
+k8s-kobace-deploy-np:
+  extends: .deploy-k8s-kobace # Location: 
+  environment:
+    deployment_tier: development
+    name: dev
+  variables:
+    BLUE_APP: $APP_NAME-blue
+    IS_BLUE_GREEN_DEPLOY: "true"
+    VAULT_CONFIG_PATH: $VAULT_CONFIG_PATH_NONPROD
+    KOBACE_ARGS: $APP_NAME -f $KOB_MF_FILE
+    NAMESPACE: $NAMESPACE_NONPROD
+  rules:
+    - *environment_rules_np
+  after_script: # temporary -> remember to remove
+    - curl $VAULT_CLI_SH > vaultcli.sh;source vaultcli.sh $VAULT_CONFIG_PATH
+    - echo $CLUSTER
+    - echo $AUTH_ENDPOINT
+    - echo $USERNAME
+    - echo $NAMESPACE
+    - echo $BLUE_APP
+    - kob get-kubeconfig $CLUSTER -a $AUTH_ENDPOINT -u $USERNAME -n $NAMESPACE -p $PASSWORD -k
+    - kob map-route $BLUE_APP $BLUE_APP.$KOB_DOMAIN --force
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+# ── HEALTHCHECK NP ───────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/v3.0.0/test-jobs.yml#L57
+# Stage: validate-deploy
+
+healthcheck:
+  extends: .healthcheck
+  image: $DOCKER_IMAGE
+  allow_failure: false
+  variables:
+    HEALTH_CHECK_URL: 'https://$BLUE_APP.$KOB_DOMAIN/health/live'
+  before_script:
+    - |
+      echo "Health check URL: $HEALTH_CHECK_URL"
+  rules:
+    - *environment_rules_np
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# ── SWITCH ROUTE NP ──────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/main/deploy-jobs.yml?ref_type=heads#L1678
+# Stage: switch-route
+
+switch-route-kobace-np:
+  image: $DOCKER_IMAGE
+  extends: .switch-route-k8s-kobace
+  variables:
+    IS_BLUE_GREEN_DEPLOY: 'true'
+    NAMESPACE: $NAMESPACE_NONPROD
+    VAULT_CONFIG_PATH: $VAULT_CONFIG_PATH_NONPROD
+    KOBACE_ARGS: '$APP_NAME -f $KOB_MF_FILE'
+    METADATA_FILENAME: deploy-jobs.yml
+    MAP_ROUTE: $APP_NAME.$KOB_DOMAIN
+  rules:
+    - *environment_rules_np
+  tags:
+  - linux
+  artifacts:
+    paths:
+    - log-output.txt
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# ── CLEANUP NP ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/main/deploy-jobs.yml?ref_type=heads#L1746
+# Stage: cleanup
+
+cleanup-kobace:
+  extends: .cleanup-k8s-kobace
+  variables:
+    IS_BLUE_GREEN_DEPLOY: 'true'
+    VAULT_CONFIG_PATH: $VAULT_CONFIG_PATH_NONPROD
+    METADATA_FILENAME: deploy-jobs.yml
+    NAMESPACE: $NAMESPACE_NONPROD
+  rules:
+    - *environment_rules_np
+  tags:
+  - linux
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# ── PLX NP ──────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/main/deploy-jobs.yml?ref_type=heads#L2650
+# Stage: after-deploy
+    
+plx-integration:
+  extends: .plx-integration
+  stage: after-deploy
+  allow_failure: false
+  dependencies:
+    - switch-route-kobace-np
+  variables:
+    VAULT_CONFIG_PATH: $VAULT_CONFIG_PATH_NONPROD
+    CUSTOM_APP_NAME: $APPLICATION_NAME
+    NAMESPACE: $NAMESPACE_NONPROD
+  before_script:
+    - echo "CUSTOM_APP_NAME = $CUSTOM_APP_NAME"
+  rules:
+    - if: $TARGET_ENVIRONMENT == null && $CI_COMMIT_BRANCH =~ /^release./
+      variables:
+        ENVIRONMENT: dit
+        TARGET_ENVIRONMENT: dit
+    - if: $TARGET_ENVIRONMENT == null && $CI_COMMIT_BRANCH == "develop-ge1"
+      variables:
+        ENVIRONMENT: ge1
+        TARGET_ENVIRONMENT: ge1
+    - if: $TARGET_ENVIRONMENT == null && $CI_COMMIT_BRANCH == "develop-ge2"
+      variables:
+        ENVIRONMENT: ge2
+        TARGET_ENVIRONMENT: ge2
+    - if: $TARGET_ENVIRONMENT == null && $CI_COMMIT_BRANCH == "develop-ge3"
+      variables:
+        ENVIRONMENT: ge3
+        TARGET_ENVIRONMENT: ge3
+    - if: $TARGET_ENVIRONMENT == null && $CI_COMMIT_BRANCH == "develop-ge4"
+      variables:
+        ENVIRONMENT: ge4
+        TARGET_ENVIRONMENT: ge4
+    - if: $TARGET_ENVIRONMENT == null && $CI_COMMIT_BRANCH == "develop-perf"
+      variables:
+        ENVIRONMENT: perf
+        TARGET_ENVIRONMENT: perf
+    - if: $TARGET_ENVIRONMENT == null && $CI_COMMIT_BRANCH =~ /^story./
+      variables:
+        ENVIRONMENT: dev
+        TARGET_ENVIRONMENT: dev
+    - if: $TARGET_ENVIRONMENT =~ /^(dev|dit|ge1|ge2|ge3|ge4|perf)$/
+      variables:
+        ENVIRONMENT: $TARGET_ENVIRONMENT
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# ── CREATE TAG ───────────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/v3.0.0/custom-jobs.yml?ref_type=tags#L61
+# Stage: create-tag
+ 
+create-tag:
+  extends: .create-tag 
+  before_script:
+    - echo "Starting before_script..."
+    - source app_version.txt
+    - echo "The App Version is $APP_VERSION"
+    - export TAG="1.0.${APP_VERSION}"
+  variables:
+    VAULT_SECRET_PATH: kv/GITLAB
+  allow_failure: false
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  when: always
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# ── VERSION APP ──────────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: THIS PIPELINE 
+# Stage: build
+
+version-app:
+  stage: build
+  allow_failure: false
+  needs: ["compile-package"]
+  script:
+    - |                           
+      echo "Generating app version..."
+      export VERSION_HASH=$(git log --no-merges -n 1 --pretty=format:"%h" origin/$CI_COMMIT_BRANCH)
+      echo " Current Version from $TRIGGER_TARGET_ENVIRONMENT: $VERSION_HASH"
+      echo " Current branch: $CI_COMMIT_BRANCH"                             
+      echo " Project version: $VERSION_HASH"
+      echo " Link to the commit: ${CI_PROJECT_URL}/-/commit/${VERSION_HASH}"
+      echo " Pipeline code: $CI_PIPELINE_ID"
+      echo " Pipeline URL: $CI_PIPELINE_URL"
+      echo " Pipeline Source: $CI_PIPELINE_SOURCE"
+      echo "APP_VERSION=${VERSION_HASH}" > app_version.txt
+  artifacts:
+    paths:
+      - app_version.txt
+  rules:
+    - if: $TARGET_ENVIRONMENT !~ /^(ge1|ge2|ge3|ge4|perf|production)$/ && $CI_COMMIT_TAG == null && $CI_PIPELINE_SOURCE != 'merge_request_event'
+  tags:
+    - linux
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# ┌──────────────────────╮
+# │ PROD ENVIRONMENT JOBS│
+# └──────────────────────╯
+# Branches: main, tag pipelines
+
+
+# ── BUILD CONTAINER ───────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/v3.0.0/deploy-jobs.yml#L1922 
+# Stage: build-container
+
+kob-build-container-prd:
+  extends: .build-container-image  
+  when: manual
+  variables:
+    CONTAINER_TOOL: kob
+    APP_NAME: $APPLICATION_NAME
+    KOBACE_MANIFEST_FILE: $KOB_MF_FILE
+    VAULT_CONFIG_PATH: $VAULT_CONFIG_PATH_PROD/S3B
+    KOBACE_ARGS: $APP_NAME -i 1 -m 1G -c 200m -f $KOB_MF_FILE
+    NAMESPACE: $NAMESPACE_PROD
+  rules:
+  - *environment_rules_prod
+  before_script:
+    - echo "Building for PROD"
+    - echo "Using VAULT_CONFIG_PATH = $VAULT_CONFIG_PATH_PROD/S3B"
+    - echo "Using APP_NAME = $APPLICATION_NAME"
+    - echo "Using NAMESPACE = $NAMESPACE_PROD"
+    - echo "Using PROD_VAULT_ADDR = $PROD_VAULT_ADDR"
+    - echo "Using KOBACE_ARGS = $KOBACE_ARGS"
+    - echo "Using KOBACE_MANIFEST_FILE = $KOBACE_MANIFEST_FILE"
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# ── DEPLOY PROD ──────────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/v3.0.0/deploy-jobs.yml#L1659
+# Stage: deploy-prod
+
+# Server: api-p2.kob.dell.com 
+# PC1 = P2
+k8s-deploy-PC1:
+  extends: .deploy-k8s-kobace-prod 
+  allow_failure: false
+  when: manual
+  variables:
+    IS_BLUE_GREEN_DEPLOY: 'true'
+    BLUE_APP: $APPLICATION_NAME-blue
+    VAULT_CONFIG_PATH: $VAULT_CONFIG_PATH_PROD/PC1
+    NAMESPACE: $NAMESPACE_PROD
+    APP_NAME: $APPLICATION_NAME
+    KOBACE_ARGS: $APP_NAME -i 1 -m 1G -c 200m -f $KOB_MF_FILE
+    MAP_ROUTE: $APP_NAME-blue.$KOB_DOMAIN
+  rules:
+    - *environment_rules_prod
+
+# Server: api-s1.kob.dell.com 
+# S3B = S1
+k8s-deploy-S3B:
+  extends: .deploy-k8s-kobace-prod 
+  allow_failure: false
+  when: manual
+  variables:
+    IS_BLUE_GREEN_DEPLOY: 'true'
+    BLUE_APP: $APPLICATION_NAME-blue
+    VAULT_CONFIG_PATH: $VAULT_CONFIG_PATH_PROD/S3B
+    NAMESPACE: $NAMESPACE_PROD
+    APP_NAME: $APPLICATION_NAME
+    VAULT_ADDR: $PROD_VAULT_ADDR
+    KOBACE_ARGS: $APP_NAME -i 1 -m 1G -c 200m -f $KOB_MF_FILE
+    MAP_ROUTE: $APP_NAME-blue.$KOB_DOMAIN
+  rules:
+    - *environment_rules_prod
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# ── HEALTHCHECK PROD ─────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/v3.0.0/test-jobs.yml#L57
+# Stage: validate-prod
+
+healthcheck-PC1:
+  extends: .healthcheck 
+  image: $DOCKER_IMAGE
+  stage: validate-prod
+  allow_failure: false
+  dependencies:
+    - k8s-deploy-PC1
+  only:
+    refs:
+      - tags
+    variables:
+    HEALTH_CHECK_URL: 'https://$APPLICATION_NAME-blue.$DOMAIN_PC1/health/live'
+  before_script:
+    - |
+      echo "Health check URL: $HEALTH_CHECK_URL"
+
+healthcheck-S3B:
+  extends: .healthcheck 
+  image: $DOCKER_IMAGE
+  stage: validate-prod
+  allow_failure: false
+  dependencies:
+    - k8s-deploy-S3B
+  only:
+    refs:
+      - tags
+    variables:
+    HEALTH_CHECK_URL: 'https://$APPLICATION_NAME-blue.$DOMAIN_S3B/health/live'
+  before_script:
+    - |
+      echo "Health check URL: $HEALTH_CHECK_URL"
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  
+# ── SWITCH ROUTE PROD ────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/v3.0.0/deploy-jobs.yml#L1693
+# Stage: go-live
+
+switch-route-kobace-PC1:
+  image: $DOCKER_IMAGE
+  extends: .switch-route-k8s-kobace-prod  
+  allow_failure: false
+  when: manual
+  variables:
+    IS_BLUE_GREEN_DEPLOY: 'true'
+    VAULT_CONFIG_PATH: $VAULT_CONFIG_PATH_PROD/PC1
+    KOBACE_ARGS: $APP_NAME -i 2 -m 2G -c 500m -f $KOB_MF_FILE
+    TARGET_K8S_OBJECTS: $KOB_MF_FILE
+    METADATA_FILENAME: deploy-jobs.yml
+    VAULT_ADDR: $PROD_VAULT_ADDR
+    MAP_ROUTE: $APP_NAME.$KOB_DOMAIN
+    NAMESPACE: $NAMESPACE_PROD
+  rules:
+    - *environment_rules_prod
+  tags:
+  - linux
+  artifacts:
+    paths:
+    - log-output.txt
+
+switch-route-kobace-S3B:
+  image: $DOCKER_IMAGE
+  extends: .switch-route-k8s-kobace-prod 
+  allow_failure: false
+  when: manual
+  variables:
+    IS_BLUE_GREEN_DEPLOY: 'true'
+    VAULT_CONFIG_PATH: $VAULT_CONFIG_PATH_PROD/S3B
+    KOBACE_ARGS: $APP_NAME -i 2 -m 2G -c 500m -f $KOB_MF_FILE
+    TARGET_K8S_OBJECTS: $KOB_MF_FILE
+    METADATA_FILENAME: deploy-jobs.yml
+    VAULT_ADDR: $PROD_VAULT_ADDR
+    MAP_ROUTE: $APP_NAME.$KOB_DOMAIN
+    NAMESPACE: $NAMESPACE_PROD
+  rules:
+    - *environment_rules_prod
+  tags:
+  - linux
+  artifacts:
+    paths:
+    - log-output.txt
+
+# ────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# ── PLX PROD ────────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/v3.0.0/deploy-jobs.yml?ref_type=tags#L2667
+# Stage: after-deploy 
+
+plx-integration-PC1:
+  extends: .plx-integration-prod
+  stage: after-deploy
+  when: manual
+  allow_failure: false
+  dependencies:
+    - switch-route-kobace-PC1
+  variables:
+    VAULT_CONFIG_PATH: $VAULT_CONFIG_PATH_PROD/PC1
+    CUSTOM_APP_NAME: $APPLICATION_NAME
+    NAMESPACE: $NAMESPACE_PROD
+    VAULT_ADDR: $PROD_VAULT_ADDR
+  rules:
+    - *environment_rules_prod
+  tags:
+  - linux
+
+plx-integration-S3B:
+  extends: .plx-integration-prod
+  stage: after-deploy
+  when: manual
+  allow_failure: false
+  dependencies:
+    - switch-route-kobace-S3B
+  variables:
+    VAULT_CONFIG_PATH: $VAULT_CONFIG_PATH_PROD/S3B
+    CUSTOM_APP_NAME: $APPLICATION_NAME
+    NAMESPACE: $NAMESPACE_PROD
+    VAULT_ADDR: $PROD_VAULT_ADDR
+  rules:
+    - *environment_rules_prod
+  tags:
+  - linux
+
+# ────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# ── HEALTHCHECK PROD ────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/v3.0.0/test-jobs.yml#L69
+# Stage: validate-LB 
+
+healthcheck-LB:
+  extends: .healthcheck 
+  image: $DOCKER_IMAGE
+  stage: validate-prod
+  allow_failure: false
+  dependencies:
+    - k8s-deploy-S3B
+  only:
+    refs:
+      - tags
+    variables:
+    HEALTH_CHECK_URL: 'https://$APPLICATION_NAME.$DOMAIN_LB/health/live'
+  before_script:
+    - |
+      echo "Health check URL: $HEALTH_CHECK_URL"
+
+# ────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# ── CLEANUP PROD ────────────────────────────────────────────────────────────────────────────────────────
+
+# Location: https://gitlab.dell.com/devops/job-templates/-/blob/v3.0.0/deploy-jobs.yml#L1762
+# Stage: cleanup
+
+cleanup-kobace-PC1:
+  extends: .cleanup-k8s-kobace-prod  
+  when: manual
+  allow_failure: false
+  variables:
+    IS_BLUE_GREEN_DEPLOY: 'true'
+    VAULT_CONFIG_PATH: $VAULT_CONFIG_PATH_PROD/PC1
+    METADATA_FILENAME: deploy-jobs.yml
+    APP_NAME: $APPLICATION_NAME
+    VAULT_ADDR: $PROD_VAULT_ADDR
+    NAMESPACE: $NAMESPACE_PROD
+  rules:
+    - *environment_rules_prod
+  tags:
+  - linux
+
+cleanup-kobace-S3B:
+  extends: .cleanup-k8s-kobace-prod 
+  when: manual
+  allow_failure: false
+  variables:
+    IS_BLUE_GREEN_DEPLOY: 'true'
+    VAULT_CONFIG_PATH: $VAULT_CONFIG_PATH_PROD/S3B
+    METADATA_FILENAME: deploy-jobs.yml
+    APP_NAME: $APPLICATION_NAME
+    VAULT_ADDR: $PROD_VAULT_ADDR
+    NAMESPACE: $NAMESPACE_PROD
+  rules:
+    - *environment_rules_prod
+  tags:
+  - linux
+
+# ────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
