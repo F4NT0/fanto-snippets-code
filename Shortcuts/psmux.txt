@@ -1,0 +1,101 @@
+
+╭──────────────────────────╮
+│ PSMUX KEYBOARD SHORTCUT  │
+╰──────────────────────────╯
+
+⟶ Janelas
+
+╭─────────────────┬──────────────────────────────╮
+│     COMANDO     │          DESCRIÇÃO           │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + C   │ Cria nova janela             │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + N   │ Ir para próxima janela       │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + P   │ Voltar uma janela            │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + W   │ Seletor interativo           │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + &   │ Matar janela atual           │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + ,   │ Renomear janela atual        │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + 0-9 │ Selecionar janela por nro    │
+╰─────────────────┴──────────────────────────────╯
+
+⟶ DIVISÃO E NAVEGAÇÃO DE PAINÉIS
+
+╭─────────────────┬──────────────────────────────╮
+│     COMANDO     │          DESCRIÇÃO           │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + H   │ Dividir painel horizontal    │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + V   │ Dividir painel vertical      │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + %   │ Dividir horizontal (tmux)    │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + "   │ Dividir vertical (tmux)      │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + ↑   │ Navegar painel acima         │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + ↓   │ Navegar painel abaixo        │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + ←   │ Navegar painel esquerda      │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + →   │ Navegar painel direita       │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + Q   │ Mostrar numeros paineis      │
+╰─────────────────┴──────────────────────────────╯
+
+⟶ REDIMENSIONAR PAINÉIS
+
+╭────────────────────────┬──────────────────────────────╮
+│        COMANDO         │          DESCRIÇÃO           │
+├────────────────────────┼──────────────────────────────┤
+│  Ctrl + A + Ctrl + ↑   │ Redimensionar para cima      │
+├────────────────────────┼──────────────────────────────┤
+│  Ctrl + A + Ctrl + ↓   │ Redimensionar para baixo     │
+├────────────────────────┼──────────────────────────────┤
+│  Ctrl + A + Ctrl + ←   │ Redimensionar para esquerda  │
+├────────────────────────┼──────────────────────────────┤
+│  Ctrl + A + Ctrl + →   │ Redimensionar para direita   │
+╰────────────────────────┴──────────────────────────────╯
+
+⟶ GERENCIAR PAINÉIS
+
+╭─────────────────┬──────────────────────────────╮
+│     COMANDO     │          DESCRIÇÃO           │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + X   │ Matar painel atual           │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + Z   │ Alternar zoom no painel      │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + {   │ Trocar painel para cima      │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + }   │ Trocar painel para baixo     │
+╰─────────────────┴──────────────────────────────╯
+
+⟶ SESSÕES 
+
+╭─────────────────┬──────────────────────────────╮
+│     COMANDO     │          DESCRIÇÃO           │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + D   │ Desconectar da sessão atual  │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + S   │ Seletor de sessões           │
+├─────────────────┼──────────────────────────────┤
+│  Ctrl + A + $   │ Renomear sessão atual        │
+╰─────────────────┴──────────────────────────────╯
+
+COMANDOS DE SESSÕES NO TERMINAL
+
+> psmux new-session -s work (inicia nova sessão nomeada work)
+> psmux attach -t nome-sessao (conecta na sessão)
+> psmux ls (lista sessões ativas)
+> psmux kill-session -t nome-sessao (mata sessão)
+> psmux kill-server (mata todas as sessões)
+
+
+
+
+
