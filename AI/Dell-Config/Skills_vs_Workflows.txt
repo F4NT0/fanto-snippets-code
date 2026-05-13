@@ -1,0 +1,25 @@
+
+Key Differences: Skills vs Workflows
+
+┌──────────────────┬─────────────────────────────────────────────┬──────────────────────────────────────────────┐
+│ Aspect           │ Skills                                      │ Workflows                                    │
+├──────────────────┼─────────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ Purpose          │ Single, focused capabilities                │ Orchestrated, multi-step procedures          │
+├──────────────────┼─────────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ Scope            │ Specific task (e.g., "install Snyk")        │ Complex process (remediate vulnerabilities)  │
+├──────────────────┼─────────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ Composition      │ Self-contained                              │ Compose multiple skills and rules            │
+├──────────────────┼─────────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ Decision Logic   │ Minimal                                     │ Complex branching and conditional logic      │
+├──────────────────┼─────────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ State Management │ Stateless                                   │ Can maintain state (batch processing, resume)│
+├──────────────────┼─────────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ Output           │ Specific artifact or action                 │ Comprehensive reports and documentation      │
+├──────────────────┼─────────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ Examples         │ snyk-authenticator, gitlab-mr-creation      │ check-and-fix-snyk-vulns, verify-and-commit  │
+└──────────────────┴─────────────────────────────────────────────┴──────────────────────────────────────────────┘
+
+This workflow architecture enables Windsurf to act as an orchestrator of complex engineering processes, 
+
+coordinating multiple capabilities to deliver sophisticated outcomes that would
+typically require human coordination across multiple tools and teams.

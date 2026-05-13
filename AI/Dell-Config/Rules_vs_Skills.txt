@@ -1,0 +1,19 @@
+
+Key Differences: Rules vs Skills
+
+┌────────────┬────────────────────────────────────┬──────────────────────────────────────────────────────────────────────┐
+│ Aspect     │ Rules                              │ Skills                                                               │
+├────────────┼────────────────────────────────────┼──────────────────────────────────────────────────────────────────────┤
+│ Purpose    │ Guardrails and standards           │ Actionable workflows                                                 │
+├────────────┼────────────────────────────────────┼──────────────────────────────────────────────────────────────────────┤
+│ Activation │ Always-on (trigger: always_on)     │ On-demand (trigger: model_decision or manual)                        │
+├────────────┼────────────────────────────────────┼──────────────────────────────────────────────────────────────────────┤
+│ Scope      │ Broad, cross-cutting concerns      │ Specific, task-focused                                               │
+├────────────┼────────────────────────────────────┼──────────────────────────────────────────────────────────────────────┤
+│ Output     │ Guidance and constraints           │ Executed actions and artifacts                                       │
+├────────────┼────────────────────────────────────┼──────────────────────────────────────────────────────────────────────┤
+│ Examples   │ coding-rules.md, security-rules.md │ testing-setup, gitlab-mr-creation                                    │
+└────────────┴────────────────────────────────────┴──────────────────────────────────────────────────────────────────────┘
+
+This skills architecture enables Windsurf to act as a knowledgeable engineering partner that can both guide development (rules) and execute complex tasks (skills) with consistency and
+quality.
